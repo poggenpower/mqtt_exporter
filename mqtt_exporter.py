@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 
-import prometheus_client as prometheus
 from collections import defaultdict
 import logging
 import argparse
-import paho.mqtt.client as mqtt
 import yaml
 import os
 import re
@@ -13,9 +11,13 @@ import time
 import signal
 import sys
 from yamlreader import yaml_load
+import prometheus_client as prometheus
+from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily, HistogramMetricFamily, SummaryMetricFamily
+import paho.mqtt.client as mqtt
 
 VERSION = '1.2.4'
 
+METRIC_TYPES = ['gauge', 'counter', 'histogram', 'summary']
 
 def _read_config(config_path):
     """Read config file from given location, and parse properties"""
@@ -334,79 +336,25 @@ def _mqtt_init(mqtt_config, metrics):
 
 def _export_to_prometheus(name, metric, labels):
     """Export metric and labels to prometheus."""
-    valid_types = ['gauge', 'counter', 'summary', 'histogram']
-    if metric['type'] not in valid_types:
+    if metric['type'] not in METRIC_TYPES:
         logging.warning(
-            f"Metric type: {metric['type']}, is not a valid metric type. Must be one of: {valid_types}")
+            f"Metric type: {metric['type']}, is not a valid metric type. Must be one of: {METRIC_TYPES}")
 
     value = labels['value']
     del labels['value']
 
     sorted_labels = _get_sorted_tuple_list(labels)
     label_names, label_values = list(zip(*sorted_labels))
-
-    prometheus_metric_types = {'gauge': gauge,
-                               'counter': counter,
-                               'summary': summary,
-                               'histogram': histogram}
-
-    try:
-        prometheus_metric_types[metric['type'].lower()](
-            label_names, label_values, metric, name, value)
-        logging.debug(
-            f"_export_to_prometheus metric ({metric['type']}): {name}{labels} updated with value: {value}")
-    except KeyError:
-        logging.warning(
-            f"Metric type: {metric['type']}, is not a valid metric type. Must be one of: {list(prometheus_metric_types.keys())}")
-
-
-def gauge(label_names, label_values, metric, name, value):
-    """Define metric as Gauge, setting it to 'value'"""
-    get_prometheus_metric(label_names, label_values, metric, name).set(value)
-
-
-def get_prometheus_metric(label_names, label_values, metric, name, buckets=None):
+    metric['name'] = name
+    metric['label_names'] = label_names
+    # create uniq identifier for this metric 
     key = ':'.join([''.join(label_names), ''.join(label_values)])
-    if not metric.get('prometheus_metric') or not metric['prometheus_metric'].get('base'):
-        metric['prometheus_metric'] = {}
-        prometheus_metric_types = {'gauge': prometheus.Gauge,
-                                   'counter': prometheus.Counter,
-                                   'summary': prometheus.Summary,
-                                   'histogram': prometheus.Histogram}
-
-        metric_type = metric['type'].lower()
-        if metric_type == 'histogram' and buckets:
-            metric['prometheus_metric']['base'] = prometheus_metric_types[metric_type](name, metric['help'],
-                                                        list(label_names), buckets)
-        else:
-            metric['prometheus_metric']['base'] = prometheus_metric_types[metric_type](name, metric['help'],
-                                                                                       list(label_names))
-
-    if key not in metric['prometheus_metric'] or not metric['prometheus_metric'][key]:
-        metric['prometheus_metric'][key] = metric['prometheus_metric']['base'].labels(
-            *list(label_values))
-    return metric['prometheus_metric'][key]
-
-
-def counter(label_names, label_values, metric, name, value):
-    """Define metric as Counter, increasing it by 'value'"""
-    get_prometheus_metric(label_names, label_values, metric, name).inc(value)
-
-
-def summary(label_names, label_values, metric, name, value):
-    """Define metric as summary, observing 'value'"""
-    get_prometheus_metric(label_names, label_values,
-                          metric, name).observe(value)
-
-
-def histogram(label_names, label_values, metric, name, value):
-    """Define metric as histogram, observing 'value'"""
-    buckets = None
-    if 'buckets' in metric and metric['buckets']:
-        buckets = metric['buckets'].split(',')
-
-    get_prometheus_metric(label_names, label_values,
-                          metric, name, buckets).observe(value)
+    prometheus_metric = metric.setdefault('prometheus_metric', {}).setdefault(key, {})    
+    prometheus_metric['name'] = name
+    prometheus_metric['label_values'] = label_values
+    prometheus_metric['value'] = value
+    logging.debug(
+            f"_export_to_prometheus metric ({metric['type']}): {name}{labels} updated with value: {value}")
 
 
 def add_static_metric(timestamp):
@@ -427,6 +375,54 @@ def _signal_handler(sig, frame):
     # pylint: disable=E1101
     logging.info('Received {0}'.format(signal.Signals(sig).name))
     sys.exit(0)
+
+class CustomCollector(object):
+    def __init__(self, metrics):
+        self.metrics = metrics
+
+    def _get_metrics_by_type(self):
+        global METRIC_TYPES
+        types = {}
+        for type in METRIC_TYPES:
+            types[type] = []
+
+        for _, outer_metric in self.metrics.items():
+            for metric in outer_metric:
+                types[metric['type']].append(metric)
+                if metric.get('derived_metric'):
+                    derived_metric = metric.get('derived_metric',{})
+                    types[derived_metric['type']].append(derived_metric)
+
+        return types['gauge'], types['counter'], types['histogram'], types['summary'] 
+
+    def collect(self):
+        gauge_metrics, counter_metrics, histogram_metrics, summary_metrics = self._get_metrics_by_type()
+
+        for gm in gauge_metrics:
+            g = GaugeMetricFamily(gm['name'], gm['help'], labels=gm.get('label_names', []))
+            for key, pm in gm.get('prometheus_metric', {}).items():
+                g.add_metric(pm['label_values'], pm['value'])
+            yield g
+        
+        for cm in counter_metrics:
+            c = CounterMetricFamily(cm['name'], cm['help'], labels=cm.get('label_names'))
+            for key, pm in cm.get('prometheus_metric', {}).items():
+                c.add_metric(pm['label_values'], pm['value'])
+            yield c
+
+        for hm in histogram_metrics:
+            buckets = hm['buckets'].split(',')
+            buckets = buckets if len(buckets) > 0 else None
+            h = HistogramMetricFamily(hm['name'], hm['help'], buckets=buckets, labels=hm.get('label_names'))
+            for key, pm in hm.get('prometheus_metric', {}).items():
+                h.add_metric(pm['label_values'], pm['value'])
+            yield c
+
+        for sm in summary_metrics:
+            s = HistogramMetricFamily(sm['name'], sm['help'], labels=sm.get('label_names'))
+            for key, pm in sm.get('prometheus_metric', {}).items():
+                s.add_metric(pm['label_values'], pm['value'])
+            yield c
 
 
 def main():
@@ -455,6 +451,7 @@ def main():
         f"Starting Prometheus exporter on port: {str(config['prometheus']['exporter_port'])}")
     try:
         prometheus.start_http_server(config['prometheus']['exporter_port'])
+        prometheus.core.REGISTRY.register(CustomCollector(config['metrics']))
     except OSError as err:
         logging.critical(
             f"Error starting Prometheus exporter: {err.strerror}")

@@ -6,7 +6,9 @@ Subscribes to one or more MQTT topics, and lets you configure prometheus metrics
 
 [![Test with pytest](https://github.com/fhemberger/mqtt_exporter/actions/workflows/test.yml/badge.svg)](https://github.com/fhemberger/mqtt_exporter/actions/workflows/test.yml)[![CodeQL](https://github.com/fhemberger/mqtt_exporter/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/fhemberger/mqtt_exporter/actions/workflows/codeql-analysis.yml)![Docker Pulls](https://img.shields.io/docker/pulls/fhemberger/mqtt_exporter)
 
+
 ## Features
+
 - Supported Metrics:
   - standard metrics 
     - Gauge, Counter, Histogram, Summary
@@ -15,7 +17,7 @@ Subscribes to one or more MQTT topics, and lets you configure prometheus metrics
       - Same as Counter, but working with absolute numbers received from MQTT. Which is far more common, than sending the diff in each publish.
       - e.g. a network counter or a rain sensor
     - **Enum:**
-      - is a metric type not so common, details can be found in the [openmetrics docs](https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md#stateset) and [python client code](https://github.com/prometheus/client_python/blob/9a24236695c9ad47f9dc537a922a6d1333d8d093/prometheus_client/metrics.py#L640-L698).
+      - is a metric type not so common, details can be found in the [OpenMetrics docs](https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md#stateset) and [Python client code](https://github.com/prometheus/client_python/blob/9a24236695c9ad47f9dc537a922a6d1333d8d093/prometheus_client/metrics.py#L640-L698).
       - Allows to track as state by a know set of strings describing the state, e.g. `on/off` or `high/medium/low`
       - Common sources would be a light switch oder a door lock.
 - Comprehensive rewriting for topic, value/payload and labels 
@@ -27,7 +29,9 @@ Subscribes to one or more MQTT topics, and lets you configure prometheus metrics
     - normalize labels
   - check example configs `./exampleconf` and the configs in `./test/test_data/`
 
+
 ## Usage
+
 - Create a folder to hold the config (default: `conf/`)
 - Add metric config(s) in YAML format to the folder. Files are combined and read as a single config. (See `exampleconf/metric_example.yaml` for details)
 - Install dependencies with `pip3 install -r requirements-frozen.txt`
@@ -62,6 +66,7 @@ docker run -d \
  - PyYAML
  - yamlreader
 
+
 ## Contribution
 
 * Contribution is welcome. Fork and then PR. 
@@ -74,4 +79,3 @@ docker run -d \
 
 - Add persistence of metrics on restart
 - forget/age out metrics receiving no updates anymore
-
